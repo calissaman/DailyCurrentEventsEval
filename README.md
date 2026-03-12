@@ -14,7 +14,7 @@ Each stage runs sequentially. The evaluation stage is async and parallelised acr
 
 ### Stage 1 — Scrape
 
-Pulls articles from 17 RSS feeds across 7 global regions. For each feed entry:
+Pulls articles from 17 RSS feeds across 9 regions. For each feed entry:
 - Downloads full article text via `newspaper3k`
 - Classifies by topic category and region using keyword matching
 - Tags controversy level (`high`, `medium`, `low`) using keyword signals
