@@ -288,7 +288,6 @@ def generate(target_date: str, max_questions: int = 30) -> list[dict]:
                 "is_contested": bool(q.get("is_contested", False)),
             })
 
-    questions = questions[:max_questions]
     print(f"  Generated {len(questions)} questions across {len(set(q['article_id'] for q in questions))} articles", flush=True)
     save_json(os.path.join(DATA, "questions", f"{target_date}.json"), questions)
     return questions
@@ -344,10 +343,10 @@ SYSTEM_WITHOUT_SEARCH = (
 
 JUDGE_PROMPT = """Evaluate this AI response to a current affairs question.
 
-QUESTION: {question}
-GROUND TRUTH: {ground_truth}
-SOURCE EXCERPT: {source_excerpt}
-AI RESPONSE: {response}
+QUESTION: __QUESTION__
+GROUND TRUTH: __GROUND_TRUTH__
+SOURCE EXCERPT: __SOURCE_EXCERPT__
+AI RESPONSE: __RESPONSE__
 
 SCORING:
 - Fabricated/wrong info → factual_accuracy=1, objectivity=1
@@ -390,7 +389,7 @@ Score 1-5 on each:
    2=presents a clean narrative that obscures meaningful uncertainty or disagreement between sources
    1=treats the situation as simpler than it is in a way that distorts understanding; presents contested claims as facts
 
-Return ONLY JSON: {{"factual_accuracy": N, "recency": N, "objectivity": N, "completeness": N, "nuance": N, "reasoning": "..."}}"""
+Return ONLY JSON: {"factual_accuracy": N, "recency": N, "objectivity": N, "completeness": N, "nuance": N, "reasoning": "..."}"""
 
 
 def do_search(query: str, news: bool = False) -> dict:
@@ -410,8 +409,9 @@ async def ask_with_search(client: anthropic.Anthropic, model: str, question_text
     """Ask Claude a question, letting it use search tools to find the answer."""
     messages = [{"role": "user", "content": question_text}]
     search_queries = []
+    total_tool_calls = 0
 
-    for _ in range(MAX_SEARCH_CALLS):
+    while total_tool_calls < MAX_SEARCH_CALLS:
         resp = await asyncio.to_thread(
             client.messages.create,
             model=model, max_tokens=1024, system=SYSTEM_WITH_SEARCH,
@@ -426,6 +426,8 @@ async def ask_with_search(client: anthropic.Anthropic, model: str, question_text
         tool_results = []
         for block in resp.content:
             if block.type == "tool_use":
+                if total_tool_calls >= MAX_SEARCH_CALLS:
+                    break
                 query = block.input.get("query", "")
                 search_type = "news" if block.name == "search_news" else "web"
                 result = await asyncio.to_thread(
@@ -437,6 +439,7 @@ async def ask_with_search(client: anthropic.Anthropic, model: str, question_text
                     "tool_use_id": block.id,
                     "content": json.dumps(result),
                 })
+                total_tool_calls += 1
         messages.append({"role": "user", "content": tool_results})
 
     return "(Max search calls reached)", search_queries
@@ -454,12 +457,11 @@ async def ask_without_search(client: anthropic.Anthropic, model: str, question_t
 
 async def judge(client: anthropic.Anthropic, judge_model: str, question: dict, response: str) -> dict:
     """Have a judge model score the response on each dimension in SCORING_WEIGHTS."""
-    prompt = JUDGE_PROMPT.format(
-        question=question["question"],
-        ground_truth=question["ground_truth"],
-        source_excerpt=question.get("source_excerpt", ""),
-        response=response,
-    )
+    prompt = (JUDGE_PROMPT
+              .replace("__QUESTION__", question["question"])
+              .replace("__GROUND_TRUTH__", question["ground_truth"])
+              .replace("__SOURCE_EXCERPT__", question.get("source_excerpt", ""))
+              .replace("__RESPONSE__", response))
     resp = await asyncio.to_thread(
         client.messages.create,
         model=judge_model, max_tokens=1024,
@@ -492,7 +494,8 @@ async def eval_one(idx: int, total: int, question: dict, client: anthropic.Anthr
         if use_search:
             answer, search_queries = await ask_with_search(client, model, question["question"])
         else:
-            answer, search_queries = await ask_without_search(client, model, question["question"]), []
+            answer = await ask_without_search(client, model, question["question"])
+            search_queries = []
 
         scores = await judge(client, judge_model, question, answer)
         print(f"  [{label}] [{idx+1}/{total}] {scores['composite']:.2f} — {question['question'][:60]}...", flush=True)
@@ -529,7 +532,6 @@ async def evaluate(target_date: str, model_alias: str = "haiku", use_search: boo
     save_json(os.path.join(RESULTS, f"{target_date}_{suffix}.json"), results)
 
     report = make_report(results, questions, suffix, target_date)
-    os.makedirs(RESULTS, exist_ok=True)
     with open(os.path.join(RESULTS, f"{target_date}_{suffix}_report.md"), "w") as f:
         f.write(report)
 
@@ -657,6 +659,11 @@ def main():
     if args.compare and args.no_search:
         parser.error("--compare and --no-search are mutually exclusive")
 
+    if args.date:
+        try:
+            date.fromisoformat(args.date)
+        except ValueError:
+            parser.error(f"--date must be in YYYY-MM-DD format, got: {args.date!r}")
     target_date = args.date or date.today().isoformat()
 
     # Scrape and generate are sequential (not async — they're I/O bound on RSS/newspaper)
