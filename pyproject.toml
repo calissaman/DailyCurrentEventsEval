@@ -1,0 +1,18 @@
+[project]
+name = "current-affairs-eval"
+version = "0.1.0"
+description = "Daily benchmark testing Claude's ability to answer current affairs questions"
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=0.40.0",
+    "feedparser>=6.0",
+    "newspaper3k>=0.2.8",
+    "lxml[html_clean]>=5.0",
+    "python-dotenv>=1.0",
+]
+
+[tool.setuptools]
+py-modules = ["config", "evaluator", "generator", "judge", "models", "report", "run_eval", "scraper"]
+
+[project.scripts]
+current-affairs-eval = "run_eval:main"
