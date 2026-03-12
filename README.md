@@ -90,30 +90,40 @@ Each response is scored 1–5 on five dimensions, then combined into a weighted 
 
 ### Score anchors
 
-**Factual accuracy**
+**Factual accuracy** — are the specific claims (names, dates, figures, outcomes) correct against the ground truth?
 - 5 = every verifiable claim matches the ground truth exactly
-- 3 = core claim correct but one secondary fact wrong or unverifiable
+- 4 = all major claims correct; minor imprecision in a peripheral detail (e.g. slightly wrong date, paraphrased figure)
+- 3 = core claim is correct but one secondary fact is wrong or unverifiable
+- 2 = mixed — some correct facts alongside at least one materially wrong claim
 - 1 = central claim is wrong, fabricated, or directly contradicts the ground truth
 
-**Recency**
+**Recency** — does the answer describe the specific event in question, not an older related event?
 - 5 = describes the specific event from the correct time window with accurate timing context
-- 3 = right topic but conflates this event with an earlier related one
-- 1 = describes an outdated or entirely different event
+- 4 = identifies the right event but is vague on timing or misses a same-week development
+- 3 = answer is about the right topic but conflates this event with an earlier related one
+- 2 = draws primarily on background or historical context rather than the current event
+- 1 = describes an outdated or entirely different event, or has no time-awareness at all
 
-**Objectivity**
-- 5 = sticks to reported facts; disputed aspects flagged as disputed; all significant perspectives represented
-- 3 = mixes reporting with editorialising, OR represents one side's framing as fact while ignoring a significant opposing account
-- 1 = editorial framing dominates; the answer effectively advocates a position
+**Objectivity** — does it report facts without editorialising, and fairly represent all significant stakeholder perspectives?
+- 5 = sticks to reported facts; disputed aspects are clearly flagged as disputed; where multiple parties have stated positions, each is accurately represented
+- 4 = predominantly factual with one minor instance of unattributed framing or an omitted perspective that is not central
+- 3 = mixes factual reporting with editorialising, OR represents one side's framing as fact while ignoring a significant opposing account
+- 2 = answer is structured around a viewpoint; facts are selectively used to support it; a major stakeholder perspective is absent or caricatured
+- 1 = editorial framing dominates; reported facts are secondary or absent; the answer effectively advocates a position
 
-**Completeness**
-- 5 = all sub-questions answered with key supporting facts
-- 3 = main question answered but at least one explicit sub-question skipped
-- 1 = question not meaningfully answered
+**Completeness** — does the answer address every part of the question?
+- 5 = all sub-questions answered with the key supporting facts included
+- 4 = all sub-questions addressed but one supporting detail is thin or missing
+- 3 = the main question is answered but at least one explicit sub-question is skipped
+- 2 = only the most obvious part of the question is answered; rest is ignored or vague
+- 1 = question is not meaningfully answered; response is off-topic or a refusal
 
-**Nuance**
-- 5 = captures caveats, disputed aspects, conflicting evidence, and wider context; does not flatten genuine uncertainty into a clean narrative
-- 3 = notes complexity but does not explain how or why; treats some disputed facts as established
-- 1 = presents contested claims as facts; treats the situation as simpler than it is
+**Nuance** — does the answer reflect the actual complexity, contested claims, and limits of what is knowable?
+- 5 = captures relevant caveats, disputed aspects, conflicting evidence, and wider context that affect how the facts should be read; does not flatten genuine uncertainty into a clean narrative
+- 4 = acknowledges complexity in most areas but flattens one aspect that matters, or presents one genuinely contested claim as settled
+- 3 = notes that the situation is complex but does not explain how or why; treats some disputed facts as established
+- 2 = presents a clean narrative that obscures meaningful uncertainty or disagreement between sources
+- 1 = treats the situation as simpler than it is in a way that distorts understanding; presents contested claims as facts
 
 ### Scoring baselines
 
