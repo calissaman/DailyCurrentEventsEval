@@ -45,7 +45,7 @@ MODELS: dict[str, str] = {
 }
 
 # Which model generates the eval questions
-GENERATOR_MODEL = "claude-sonnet-4-6"
+GENERATOR_MODEL = MODELS["sonnet"]
 
 # How much each scoring dimension counts toward the final score
 # Primary tier (81%): accuracy, recency, objectivity — core qualities

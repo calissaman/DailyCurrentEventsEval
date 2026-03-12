@@ -19,6 +19,7 @@ from collections import Counter, defaultdict
 from datetime import date
 
 import anthropic, feedparser
+from ddgs import DDGS
 from dotenv import load_dotenv
 from newspaper import Article as NewsArticle, Config as NewsConfig
 
@@ -35,9 +36,11 @@ MAX_ENTRIES_TO_FETCH = 100
 MAX_ARTICLES = 80
 MIN_ARTICLE_LENGTH = 200
 ARTICLE_TEXT_TRUNCATION = 3000
+CLASSIFY_TEXT_TRUNCATION = 2000
 GENERATION_BATCH_SIZE = 5
 TITLE_SIMILARITY_THRESHOLD = 0.3
 TITLE_STEM_LENGTH = 4
+MAX_CONCURRENT_EVALS = 5
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -48,14 +51,17 @@ def save_json(path, items):
         json.dump(items, f, indent=2)
 
 
-def load_json(path):
-    with open(path) as f:
-        return json.load(f)
+def load_json(path: str) -> list | dict:
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        raise SystemExit(f"Error: data file not found: {path}\nHint: run without --eval-only/--generate-only first to generate the required data.")
 
 
-def classify(title, text, keywords_map, default="geopolitics"):
+def classify(title: str, text: str, keywords_map: dict, default: str = "geopolitics") -> str:
     """Match text against keyword lists and return the best-matching key."""
-    combined = (title + " " + text[:2000]).lower()
+    combined = (title + " " + text[:CLASSIFY_TEXT_TRUNCATION]).lower()
     best, best_count = default, 0
     for key, keywords in keywords_map.items():
         count = sum(1 for kw in keywords if kw in combined)
@@ -111,7 +117,7 @@ def scrape(target_date: str) -> list[dict]:
                         "region": feed["region"],
                     })
         except Exception as ex:
-            print(f"    Warning: {ex}")
+            print(f"    Warning: {ex}", flush=True)
     print(f"  {len(entries)} unique entries", flush=True)
 
     # Download full article text
@@ -250,9 +256,12 @@ def generate(target_date: str, max_questions: int = 30) -> list[dict]:
             text = resp.content[0].text.strip()
             if text.startswith("```"):
                 text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            start, end = text.find("["), text.rfind("]")
+            if start != -1 and end != -1:
+                text = text[start:end + 1]
             raw = json.loads(text)
         except Exception as ex:
-            print(f"  Warning: batch failed: {ex}")
+            print(f"  Warning: batch failed: {ex}", flush=True)
             continue
 
         # Take only 1 question per article
@@ -297,8 +306,8 @@ SEARCH_TOOLS = [
 SYSTEM_WITH_SEARCH = (
     "You are a helpful assistant with web and news search tools. "
     "You MUST search before answering — never rely on training data for current events.\n\n"
-    "RULES:\n"
-    "- You have a STRICT LIMIT of 5 tool calls. Plan carefully.\n"
+    f"RULES:\n"
+    f"- You have a STRICT LIMIT of {MAX_SEARCH_CALLS} tool calls. Plan carefully.\n"
     "- Start with search_news for recent events.\n"
     "- After getting good results, STOP searching and answer immediately.\n"
     "- Base your answer ONLY on search results. Do not guess.\n"
@@ -382,10 +391,9 @@ Score 1-5 on each:
 Return ONLY JSON: {{"factual_accuracy": N, "recency": N, "objectivity": N, "completeness": N, "nuance": N, "reasoning": "..."}}"""
 
 
-def do_search(query, news=False):
+def do_search(query: str, news: bool = False) -> dict:
     """Run a DuckDuckGo search and return results."""
     try:
-        from ddgs import DDGS
         results = DDGS().news(query, max_results=5) if news else DDGS().text(query, max_results=5)
         return {"results": [
             {"title": r.get("title", ""), "url": r.get("url", r.get("href", "")),
@@ -443,7 +451,7 @@ async def ask_without_search(client, model, question_text):
 
 
 async def judge(client: anthropic.Anthropic, judge_model: str, question: dict, response: str) -> dict:
-    """Have a judge model score the response on 5 dimensions."""
+    """Have a judge model score the response on each dimension in SCORING_WEIGHTS."""
     prompt = JUDGE_PROMPT.format(
         question=question["question"],
         ground_truth=question["ground_truth"],
@@ -495,15 +503,17 @@ async def eval_one(idx: int, total: int, question: dict, client: anthropic.Anthr
 async def evaluate(target_date: str, model_alias: str = "haiku", use_search: bool = True, max_questions: int = 30) -> tuple[str, float]:
     """Run the full evaluation: ask all questions in parallel, judge, save results."""
     model = MODELS[model_alias]
-    judge_model = MODELS["opus"] if model_alias == "sonnet" else MODELS["sonnet"]
+    # Always use opus as judge — it's the most capable and scores against a ground truth,
+    # so self-evaluation bias is minimal even when evaluating opus itself.
+    judge_model = MODELS["opus"]
     client = anthropic.Anthropic()
 
     questions = load_json(os.path.join(DATA, "questions", f"{target_date}.json"))[:max_questions]
     label = "with search" if use_search else "without search"
     print(f"Evaluating {len(questions)} questions {label} ({model_alias})...", flush=True)
 
-    # Limit concurrency to 5 to avoid DuckDuckGo rate limits
-    semaphore = asyncio.Semaphore(5)
+    # Limit concurrency to avoid DuckDuckGo rate limits
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_EVALS)
     async def limited_eval(i, q):
         async with semaphore:
             return await eval_one(i, len(questions), q, client, model, judge_model, use_search)
@@ -616,7 +626,7 @@ async def async_main(args, target_date):
         # Run both modes in parallel
         task_search = evaluate(target_date, args.model, use_search=True, max_questions=args.max_questions)
         task_no_search = evaluate(target_date, args.model, use_search=False, max_questions=args.max_questions)
-        (s1, avg1), (s2, avg2) = await asyncio.gather(task_search, task_no_search)
+        (_, avg1), (_, avg2) = await asyncio.gather(task_search, task_no_search)
         delta = avg1 - avg2
         print(f"\n{'='*50}")
         print(f"  With search:    {avg1:.2f}")
