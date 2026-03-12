@@ -42,7 +42,7 @@ The model is given a strict limit of 5 tool calls and instructed to express cali
 
 ### Stage 4 — Judge
 
-A separate judge model scores each response on 5 dimensions (1–5 scale). Opus is always used as the judge. Because scoring is against a ground truth (not open-ended), self-evaluation bias is minimal when opus evaluates itself.
+Opus always acts as the judge model, scoring each response on 5 dimensions (1–5 scale). Because scoring is against a ground truth rather than open-ended, self-evaluation bias is minimal when opus is also the model being evaluated.
 
 | Evaluated model | Judge model |
 |----------------|-------------|

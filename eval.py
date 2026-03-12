@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Current Affairs Eval — tests how well Claude answers questions about this week's news.
+Current Affairs Eval — tests how well Claude answers questions about the last 7 days of news.
 
 Pipeline: scrape RSS → generate questions → ask Claude → judge answers → report
 
@@ -41,11 +41,13 @@ GENERATION_BATCH_SIZE = 5
 TITLE_SIMILARITY_THRESHOLD = 0.3
 TITLE_STEM_LENGTH = 4
 MAX_CONCURRENT_EVALS = 5
+NEWS_REQUEST_TIMEOUT = 10
+SCRAPE_DELAY_SECS = 0.5
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
-def save_json(path, items):
+def save_json(path: str, items: list | dict) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
         json.dump(items, f, indent=2)
@@ -95,7 +97,7 @@ def scrape(target_date: str) -> list[dict]:
     print(f"Scraping articles for {target_date}...", flush=True)
 
     np_config = NewsConfig()
-    np_config.request_timeout = 10
+    np_config.request_timeout = NEWS_REQUEST_TIMEOUT
     np_config.browser_user_agent = "CurrentAffairsEval/0.1"
 
     # Collect RSS entries
@@ -154,7 +156,7 @@ def scrape(target_date: str) -> list[dict]:
         })
         if len(articles) >= MAX_ARTICLES:
             break
-        time.sleep(0.5)
+        time.sleep(SCRAPE_DELAY_SECS)
 
     print(f"  Scraped {len(articles)} articles", flush=True)
     save_json(os.path.join(DATA, "articles", f"{target_date}.json"), articles)
@@ -221,7 +223,7 @@ def generate(target_date: str, max_questions: int = 30) -> list[dict]:
     # Spread across regions and categories, prioritize controversial topics
     regions_seen, cats_seen = set(), set()
     selected = []
-    # First pass: pick one article per region/category combo
+    # First pass: pick articles that add at least one unseen region or category
     for a in sorted(articles, key=lambda x: {"high": 0, "medium": 1, "low": 2}.get(x["controversy_level"], 2)):
         if a["region"] not in regions_seen or a["category"] not in cats_seen:
             selected.append(a)
@@ -251,7 +253,7 @@ def generate(target_date: str, max_questions: int = 30) -> list[dict]:
         try:
             resp = client.messages.create(
                 model=GENERATOR_MODEL, max_tokens=4096,
-                messages=[{"role": "user", "content": GENERATION_PROMPT.format(articles_text=articles_text)}],
+                messages=[{"role": "user", "content": GENERATION_PROMPT.replace("{articles_text}", articles_text)}],
             )
             text = resp.content[0].text.strip()
             if text.startswith("```"):
@@ -306,7 +308,7 @@ SEARCH_TOOLS = [
 SYSTEM_WITH_SEARCH = (
     "You are a helpful assistant with web and news search tools. "
     "You MUST search before answering — never rely on training data for current events.\n\n"
-    f"RULES:\n"
+    "RULES:\n"
     f"- You have a STRICT LIMIT of {MAX_SEARCH_CALLS} tool calls. Plan carefully.\n"
     "- Start with search_news for recent events.\n"
     "- After getting good results, STOP searching and answer immediately.\n"
@@ -404,7 +406,7 @@ def do_search(query: str, news: bool = False) -> dict:
         return {"error": str(e), "results": []}
 
 
-async def ask_with_search(client, model, question_text):
+async def ask_with_search(client: anthropic.Anthropic, model: str, question_text: str) -> tuple[str, list]:
     """Ask Claude a question, letting it use search tools to find the answer."""
     messages = [{"role": "user", "content": question_text}]
     search_queries = []
@@ -416,7 +418,7 @@ async def ask_with_search(client, model, question_text):
             tools=SEARCH_TOOLS, messages=messages,
         )
         if resp.stop_reason != "tool_use":
-            answer = "\n".join(b.text for b in resp.content if hasattr(b, "text"))
+            answer = "\n".join(b.text for b in resp.content if b.type == "text")
             return answer, search_queries
 
         # Run the searches Claude requested and send results back
@@ -440,7 +442,7 @@ async def ask_with_search(client, model, question_text):
     return "(Max search calls reached)", search_queries
 
 
-async def ask_without_search(client, model, question_text):
+async def ask_without_search(client: anthropic.Anthropic, model: str, question_text: str) -> str:
     """Ask Claude a question directly, with no search tools."""
     resp = await asyncio.to_thread(
         client.messages.create,
@@ -477,7 +479,7 @@ async def judge(client: anthropic.Anthropic, judge_model: str, question: dict, r
         print(f"  Warning: judge returned invalid JSON: {e}", flush=True)
         return {k: 3 for k in SCORING_WEIGHTS} | {"composite": 3.0, "reasoning": "parse error"}
     for key in SCORING_WEIGHTS:
-        scores[key] = max(1, min(5, int(scores[key])))
+        scores[key] = max(1, min(5, round(float(scores[key]))))
     scores["composite"] = round(sum(scores[k] * SCORING_WEIGHTS[k] for k in SCORING_WEIGHTS), 2)
     scores["reasoning"] = scores.get("reasoning", "")
     return scores
@@ -527,6 +529,7 @@ async def evaluate(target_date: str, model_alias: str = "haiku", use_search: boo
     save_json(os.path.join(RESULTS, f"{target_date}_{suffix}.json"), results)
 
     report = make_report(results, questions, suffix, target_date)
+    os.makedirs(RESULTS, exist_ok=True)
     with open(os.path.join(RESULTS, f"{target_date}_{suffix}_report.md"), "w") as f:
         f.write(report)
 
@@ -620,7 +623,7 @@ def make_report(results: list[dict], questions: list[dict], label: str, target_d
 
 # ── CLI ──────────────────────────────────────────────────────────────────
 
-async def async_main(args, target_date):
+async def async_main(args: argparse.Namespace, target_date: str) -> None:
     """Run evaluation(s) — supports --compare for parallel with/without search."""
     if args.compare:
         # Run both modes in parallel
@@ -641,7 +644,7 @@ def main():
     load_dotenv(override=True)
 
     parser = argparse.ArgumentParser(description="Current Affairs Eval")
-    parser.add_argument("--model", default="haiku", choices=["haiku", "sonnet", "opus"])
+    parser.add_argument("--model", default="haiku", choices=list(MODELS.keys()))
     parser.add_argument("--no-search", action="store_true", help="Disable search tools")
     parser.add_argument("--compare", action="store_true", help="Run with and without search in parallel")
     parser.add_argument("--scrape-only", action="store_true")
@@ -650,6 +653,9 @@ def main():
     parser.add_argument("--max-questions", type=int, default=30)
     parser.add_argument("--date", default=None)
     args = parser.parse_args()
+
+    if args.compare and args.no_search:
+        parser.error("--compare and --no-search are mutually exclusive")
 
     target_date = args.date or date.today().isoformat()
 
