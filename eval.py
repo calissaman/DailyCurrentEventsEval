@@ -151,7 +151,7 @@ def scrape(target_date: str) -> list[dict]:
             "title": entry["title"],
             "source": entry["source"],
             "url": entry["url"],
-            "published": entry.get("published", target_date),
+            "published": entry["published"] or target_date,
             "text": a.text,
             "category": classify(entry["title"], a.text, CATEGORY_KEYWORDS),
             "region": classify(entry["title"], a.text, REGION_KEYWORDS, entry["region"]),
@@ -258,7 +258,7 @@ def generate(target_date: str, max_questions: int = 30) -> list[dict]:
                 model=GENERATOR_MODEL, max_tokens=4096,
                 messages=[{"role": "user", "content": GENERATION_PROMPT.replace("{articles_text}", articles_text)}],
             )
-            text = resp.content[0].text.strip()
+            text = next((b.text for b in resp.content if b.type == "text"), "").strip()
             if text.startswith("```"):
                 text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
             start, end = text.find("["), text.rfind("]")
@@ -291,7 +291,7 @@ def generate(target_date: str, max_questions: int = 30) -> list[dict]:
                 "is_contested": bool(q.get("is_contested", False)),
             })
 
-    print(f"  Generated {len(questions)} questions across {len(set(q['article_id'] for q in questions))} articles", flush=True)
+    print(f"  Generated {len(questions)} questions", flush=True)
     save_json(os.path.join(DATA, "questions", f"{target_date}.json"), questions)
     return questions
 
@@ -455,7 +455,7 @@ async def ask_without_search(client: anthropic.Anthropic, model: str, question_t
         model=model, max_tokens=1024, system=SYSTEM_WITHOUT_SEARCH,
         messages=[{"role": "user", "content": question_text}],
     )
-    return resp.content[0].text
+    return next((b.text for b in resp.content if b.type == "text"), "")
 
 
 async def judge(client: anthropic.Anthropic, judge_model: str, question: dict, response: str) -> dict:
@@ -470,7 +470,7 @@ async def judge(client: anthropic.Anthropic, judge_model: str, question: dict, r
         model=judge_model, max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
     )
-    text = resp.content[0].text.strip()
+    text = next((b.text for b in resp.content if b.type == "text"), "").strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
     # Extract JSON object if there's surrounding prose
@@ -508,7 +508,7 @@ async def eval_one(idx: int, total: int, question: dict, client: anthropic.Anthr
         return None
 
 
-async def evaluate(target_date: str, model_alias: str = "haiku", use_search: bool = True, max_questions: int = 30) -> tuple[str, float]:
+async def evaluate(target_date: str, model_alias: str = "haiku", use_search: bool = True, max_questions: int = 30, semaphore: asyncio.Semaphore | None = None) -> tuple[str, float]:
     """Run the full evaluation: ask all questions in parallel, judge, save results."""
     model = MODELS[model_alias]
     # Always use opus as judge — it's the most capable and scores against a ground truth,
@@ -520,8 +520,11 @@ async def evaluate(target_date: str, model_alias: str = "haiku", use_search: boo
     label = "with search" if use_search else "without search"
     print(f"Evaluating {len(questions)} questions {label} ({model_alias})...", flush=True)
 
-    # Limit concurrency to avoid DuckDuckGo rate limits
-    semaphore = asyncio.Semaphore(MAX_CONCURRENT_EVALS)
+    # Limit concurrency to avoid DuckDuckGo rate limits.
+    # Caller may pass a shared semaphore (e.g. --compare runs two evaluations in parallel
+    # and must share the limit to avoid doubling effective DDG concurrency).
+    if semaphore is None:
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_EVALS)
     async def limited_eval(i, q):
         async with semaphore:
             return await eval_one(i, len(questions), q, client, model, judge_model, use_search)
@@ -632,9 +635,11 @@ def make_report(results: list[dict], questions: list[dict], label: str, target_d
 async def async_main(args: argparse.Namespace, target_date: str) -> None:
     """Run evaluation(s) — supports --compare for parallel with/without search."""
     if args.compare:
-        # Run both modes in parallel
-        task_search = evaluate(target_date, args.model, use_search=True, max_questions=args.max_questions)
-        task_no_search = evaluate(target_date, args.model, use_search=False, max_questions=args.max_questions)
+        # Run both modes in parallel, sharing one semaphore so combined DDG concurrency
+        # stays at MAX_CONCURRENT_EVALS rather than doubling.
+        shared_sem = asyncio.Semaphore(MAX_CONCURRENT_EVALS)
+        task_search = evaluate(target_date, args.model, use_search=True, max_questions=args.max_questions, semaphore=shared_sem)
+        task_no_search = evaluate(target_date, args.model, use_search=False, max_questions=args.max_questions, semaphore=shared_sem)
         (_, avg1), (_, avg2) = await asyncio.gather(task_search, task_no_search)
         delta = avg1 - avg2
         print(f"\n{'='*50}")
@@ -664,6 +669,8 @@ def main():
 
     if args.compare and args.no_search:
         parser.error("--compare and --no-search are mutually exclusive")
+    if args.max_questions < 1:
+        parser.error("--max-questions must be at least 1")
 
     if args.date:
         try:
