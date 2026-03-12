@@ -130,8 +130,10 @@ def scrape(target_date: str) -> list[dict]:
             a.download()
             a.parse()
             if not a.text or len(a.text) < MIN_ARTICLE_LENGTH:
+                time.sleep(SCRAPE_DELAY_SECS)
                 continue
         except Exception:
+            time.sleep(SCRAPE_DELAY_SECS)
             continue
 
         text_lower = a.text.lower()
@@ -141,6 +143,7 @@ def scrape(target_date: str) -> list[dict]:
 
         # Skip articles with titles too similar to ones we already have
         if any(titles_are_similar(entry["title"], existing["title"]) for existing in articles):
+            time.sleep(SCRAPE_DELAY_SECS)
             continue
 
         articles.append({
@@ -271,7 +274,7 @@ def generate(target_date: str, max_questions: int = 30) -> list[dict]:
         for q in raw:
             if "question" not in q or "ground_truth" not in q:
                 continue
-            idx = min(q.get("article_index", 0), len(batch) - 1)
+            idx = max(0, min(q.get("article_index", 0), len(batch) - 1))
             if idx in seen_articles:
                 continue
             seen_articles.add(idx)
@@ -578,10 +581,11 @@ def make_report(results: list[dict], questions: list[dict], label: str, target_d
         q = q_map.get(r["question_id"])
         if q:
             by_region[q["region"]].append(r["composite"])
-    lines += ["", "| Region | Avg | Count |", "|---|---|---|"]
-    for region in sorted(by_region):
-        s = by_region[region]
-        lines.append(f"| {region} | {sum(s)/len(s):.2f} | {len(s)} |")
+    if by_region:
+        lines += ["", "| Region | Avg | Count |", "|---|---|---|"]
+        for region in sorted(by_region):
+            s = by_region[region]
+            lines.append(f"| {region} | {sum(s)/len(s):.2f} | {len(s)} |")
 
     # Scores by contested status
     by_contested = defaultdict(list)
@@ -646,14 +650,16 @@ def main():
     load_dotenv(override=True)
 
     parser = argparse.ArgumentParser(description="Current Affairs Eval")
-    parser.add_argument("--model", default="haiku", choices=list(MODELS.keys()))
-    parser.add_argument("--no-search", action="store_true", help="Disable search tools")
-    parser.add_argument("--compare", action="store_true", help="Run with and without search in parallel")
-    parser.add_argument("--scrape-only", action="store_true")
-    parser.add_argument("--generate-only", action="store_true")
-    parser.add_argument("--eval-only", action="store_true")
-    parser.add_argument("--max-questions", type=int, default=30)
-    parser.add_argument("--date", default=None)
+    parser.add_argument("--model", default="haiku", choices=list(MODELS.keys()),
+                        help="Model to evaluate (default: haiku)")
+    parser.add_argument("--no-search", action="store_true", help="Disable search tools (baseline mode)")
+    parser.add_argument("--compare", action="store_true", help="Run with and without search in parallel and print score delta")
+    parser.add_argument("--scrape-only", action="store_true", help="Only scrape articles, skip generation and evaluation")
+    parser.add_argument("--generate-only", action="store_true", help="Only generate questions from today's articles, skip evaluation")
+    parser.add_argument("--eval-only", action="store_true", help="Skip scraping and generation, reuse existing questions for today")
+    parser.add_argument("--max-questions", type=int, default=30,
+                        help="Number of questions to generate and evaluate (default: 30)")
+    parser.add_argument("--date", default=None, help="Target date in YYYY-MM-DD format (default: today)")
     args = parser.parse_args()
 
     if args.compare and args.no_search:
@@ -666,7 +672,7 @@ def main():
             parser.error(f"--date must be in YYYY-MM-DD format, got: {args.date!r}")
     target_date = args.date or date.today().isoformat()
 
-    # Scrape and generate are sequential (not async — they're I/O bound on RSS/newspaper)
+    # Scrape and generate are sequential — feedparser and newspaper3k are blocking libraries with no async API
     if not args.generate_only and not args.eval_only:
         scrape(target_date)
     if not args.scrape_only and not args.eval_only:
