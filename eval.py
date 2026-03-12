@@ -266,7 +266,8 @@ def generate(target_date: str, max_questions: int = 30) -> list[dict]:
                 text = text[start:end + 1]
             raw = json.loads(text)
         except Exception as ex:
-            print(f"  Warning: batch failed: {ex}", flush=True)
+            batch_num = i // GENERATION_BATCH_SIZE + 1
+            print(f"  Warning: batch {batch_num} failed: {ex}", flush=True)
             continue
 
         # Take only 1 question per article
@@ -481,7 +482,7 @@ async def judge(client: anthropic.Anthropic, judge_model: str, question: dict, r
     try:
         scores = json.loads(text)
     except json.JSONDecodeError as e:
-        print(f"  Warning: judge returned invalid JSON: {e}", flush=True)
+        print(f"  Warning: judge returned invalid JSON: {e}\n  Raw text: {text[:200]}", flush=True)
         return {k: 3 for k in SCORING_WEIGHTS} | {"composite": 3.0, "reasoning": "parse error"}
     for key in SCORING_WEIGHTS:
         scores[key] = max(1, min(5, round(float(scores[key]))))
@@ -501,7 +502,9 @@ async def eval_one(idx: int, total: int, question: dict, client: anthropic.Anthr
             search_queries = []
 
         scores = await judge(client, judge_model, question, answer)
-        print(f"  [{label}] [{idx+1}/{total}] {scores['composite']:.2f} — {question['question'][:60]}...", flush=True)
+        q_text = question['question']
+        q_preview = q_text[:60] + ("..." if len(q_text) > 60 else "")
+        print(f"  [{label}] [{idx+1}/{total}] {scores['composite']:.2f} — {q_preview}", flush=True)
         return {"question_id": question["id"], "response": answer, "search_queries": search_queries, **scores}
     except Exception as e:
         print(f"  [{label}] [{idx+1}/{total}] ERROR: {e}", flush=True)
@@ -619,6 +622,8 @@ def make_report(results: list[dict], questions: list[dict], label: str, target_d
         q = q_map.get(r["question_id"])
         lines.append(f"- **{r['composite']:.2f}** — {q['question'][:100] if q else '?'}")
         lines.append(f"  - Scores: FA={r['factual_accuracy']} R={r['recency']} O={r['objectivity']} C={r['completeness']} N={r['nuance']}")
+        if r.get("reasoning"):
+            lines.append(f"  - Judge: {r['reasoning'][:150]}")
 
     # Score distribution
     buckets = Counter(round(r["composite"] * 2) / 2 for r in results)  # round to nearest 0.5

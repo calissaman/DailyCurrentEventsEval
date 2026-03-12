@@ -80,7 +80,7 @@ CONTROVERSY_KEYWORDS: dict[str, list[str]] = {
 # Keywords to guess which region an article is about
 REGION_KEYWORDS: dict[str, list[str]] = {
     "north_america": ["united states", "u.s.", "usa", "america", "canada", "mexico", "washington", "white house"],
-    "europe": ["europe", "european union", "britain", "france", "germany", "spain", "italy", "nato", "brussels", "london", "paris", "berlin"],
+    "europe": ["europe", "european union", "britain", "france", "germany", "spain", "italy", "nato", "brussels", "london", "paris", "berlin", "russia", "ukraine", "moscow", "kyiv", "putin", "zelensky", "kremlin"],
     "asia": ["china", "japan", "india", "korea", "beijing", "tokyo", "delhi", "taiwan", "hong kong", "pakistan", "bangladesh"],
     "southeast_asia": ["southeast asia", "asean", "indonesia", "thailand", "vietnam", "philippines", "malaysia", "singapore", "myanmar", "cambodia"],
     "oceania": ["australia", "new zealand", "pacific", "oceania", "fiji", "papua", "samoa", "canberra", "sydney"],
