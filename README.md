@@ -166,4 +166,4 @@ A cron job runs the full pipeline at 6:07am every day:
 7 6 * * * /home/cal/current-affairs-eval/run_daily.sh
 ```
 
-`run_daily.sh` runs haiku (full pipeline), then sonnet and opus (eval-only on the same questions), logging to `logs/YYYY-MM-DD.log`.
+`run_daily.sh` runs haiku through the full pipeline (scrape → generate → evaluate with search), then runs sonnet and opus in eval-only mode — skipping scraping and generation, evaluating with search on the same questions haiku generated. All three models are evaluated with search tools enabled. Results log to `logs/YYYY-MM-DD.log`.
